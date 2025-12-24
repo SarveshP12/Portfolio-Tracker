@@ -7,10 +7,14 @@ import {
   SidebarInset,
   SidebarProvider,
 } from "@/components/ui/sidebar"
+import { syncUserToSupabase } from "@/lib/sync-user"
 
 import data from "./data.json"
 
-export default function Page() {
+export default async function Page() {
+  // Sync user to Supabase on dashboard load
+  await syncUserToSupabase()
+
   return (
     <SidebarProvider
       style={
