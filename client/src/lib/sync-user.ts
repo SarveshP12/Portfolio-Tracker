@@ -35,6 +35,11 @@ export async function syncUserToSupabase() {
     return data
   }
 
+  // Extract role and organization_id from unsafe metadata
+  const unsafeMetadata = user.unsafeMetadata as { role?: string; organization_id?: string }
+  const role = unsafeMetadata?.role || 'student'
+  const organization_id = unsafeMetadata?.organization_id || null
+
   // Insert new user
   const { data, error } = await supabase
     .from('users')
@@ -44,6 +49,8 @@ export async function syncUserToSupabase() {
       first_name: user.firstName,
       last_name: user.lastName,
       avatar_url: user.imageUrl,
+      role: role,
+      organization_id: organization_id,
       created_at: new Date().toISOString(),
     })
     .select()
@@ -72,4 +79,32 @@ export async function getCurrentSupabaseUser() {
     .single()
 
   return data
+}
+
+export async function getStudentProfile() {
+  const user = await currentUser()
+  
+  if (!user) return null
+
+  // Get user data first
+  const { data: userData } = await supabase
+    .from('users')
+    .select('*')
+    .eq('clerk_id', user.id)
+    .single()
+
+  if (!userData) return null
+
+  // Get student data
+  const { data: studentData } = await supabase
+    .from('students')
+    .select('*')
+    .eq('user_id', userData.id)
+    .single()
+
+  // Merge and return
+  return {
+    ...userData,
+    ...studentData,
+  }
 }

@@ -42,57 +42,81 @@ export async function POST(req: Request) {
   }
 
   const eventType = evt.type
+  console.log('Received webhook event:', eventType, evt.data)
 
   // Handle user.created event
   if (eventType === 'user.created') {
-    const { id, email_addresses, first_name, last_name, image_url } = evt.data
+    const { id, email_addresses, first_name, last_name, unsafe_metadata } = evt.data
+
+    if (!email_addresses || email_addresses.length === 0) {
+      console.error('No email address found for user')
+      return new Response('No email address', { status: 400 })
+    }
+
+    // Extract role and organization_id from unsafe_metadata
+    const role = (unsafe_metadata as any)?.role || 'student'
+    const organization_id = (unsafe_metadata as any)?.organization_id || null
 
     const { error } = await supabase.from('users').insert({
-      clerk_id: id,
-      email: email_addresses[0]?.email_address,
-      first_name: first_name,
-      last_name: last_name,
-      avatar_url: image_url,
-      created_at: new Date().toISOString(),
+      user_id: id, // or whatever column name you're using
+      email: email_addresses[0].email_address,
+      first_name: first_name || null,
+      last_name: last_name || null,
+      role: role,
+      organization_id: organization_id,
     })
 
     if (error) {
       console.error('Error inserting user into Supabase:', error)
       return new Response('Error inserting user', { status: 500 })
     }
+
+    console.log('User created successfully:', id, 'with role:', role)
   }
 
   // Handle user.updated event
-  if (eventType === 'user.updated') {
-    const { id, email_addresses, first_name, last_name, image_url } = evt.data
+  else if (eventType === 'user.updated') {
+    const { id, email_addresses, first_name, last_name } = evt.data
+
+    const updateData: any = {
+      first_name: first_name || null,
+      last_name: last_name || null,
+    }
+
+    if (email_addresses && email_addresses.length > 0) {
+      updateData.email = email_addresses[0].email_address
+    }
 
     const { error } = await supabase
       .from('users')
-      .update({
-        email: email_addresses[0]?.email_address,
-        first_name: first_name,
-        last_name: last_name,
-        avatar_url: image_url,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('clerk_id', id)
+      .update(updateData)
+      .eq('user_id', id) // or whatever column name you're using
 
     if (error) {
       console.error('Error updating user in Supabase:', error)
       return new Response('Error updating user', { status: 500 })
     }
+
+    console.log('User updated successfully:', id)
   }
 
   // Handle user.deleted event
-  if (eventType === 'user.deleted') {
+  else if (eventType === 'user.deleted') {
     const { id } = evt.data
 
-    const { error } = await supabase.from('users').delete().eq('clerk_id', id)
+    if (!id) {
+      console.error('No user id found in delete event')
+      return new Response('No user id', { status: 400 })
+    }
+
+    const { error } = await supabase.from('users').delete().eq('user_id', id) // or whatever column name you're using
 
     if (error) {
       console.error('Error deleting user from Supabase:', error)
       return new Response('Error deleting user', { status: 500 })
     }
+
+    console.log('User deleted successfully:', id)
   }
 
   return new Response('Webhook processed', { status: 200 })
