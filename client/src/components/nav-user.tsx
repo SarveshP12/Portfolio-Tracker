@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import {
   IconCreditCard,
   IconDotsVertical,
@@ -30,6 +31,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { Skeleton } from "@/components/ui/skeleton"
 
 export function NavUser({
   user,
@@ -43,10 +45,32 @@ export function NavUser({
   const { isMobile } = useSidebar()
   const { signOut } = useClerk()
   const router = useRouter()
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const handleLogout = async () => {
     await signOut()
     router.push("/sign-in")
+  }
+
+  // Prevent hydration mismatch by showing skeleton until mounted
+  if (!mounted) {
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <div className="flex items-center gap-2 p-2">
+            <Skeleton className="h-8 w-8 rounded-lg" />
+            <div className="flex-1 space-y-1">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+          </div>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    )
   }
 
   return (

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -22,6 +22,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import {
   IconUser,
@@ -92,6 +93,7 @@ const batchYears = [
 ]
 
 export function ProfileForm({ user }: ProfileFormProps) {
+  const [mounted, setMounted] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [skillInput, setSkillInput] = useState("")
   const [resumeUrl, setResumeUrl] = useState<string | null>(user.resume_url || null)
@@ -152,6 +154,10 @@ export function ProfileForm({ user }: ProfileFormProps) {
     }
   }
 
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
@@ -192,6 +198,42 @@ export function ProfileForm({ user }: ProfileFormProps) {
     const first = formData.first_name?.[0] || ""
     const last = formData.last_name?.[0] || ""
     return (first + last).toUpperCase() || "U"
+  }
+
+  // Prevent hydration mismatch by showing skeleton until mounted
+  if (!mounted) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col sm:flex-row items-center gap-6">
+              <Skeleton className="h-24 w-24 rounded-full" />
+              <div className="space-y-2">
+                <Skeleton className="h-8 w-48" />
+                <Skeleton className="h-4 w-64" />
+                <Skeleton className="h-6 w-20" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
