@@ -45,7 +45,10 @@ import {
   IconUpload,
   IconEye,
   IconDeviceFloppy,
+  IconFileCode,
+  IconSparkles,
 } from "@tabler/icons-react"
+import { useRouter } from "next/navigation"
 
 interface User {
   id: string
@@ -127,8 +130,10 @@ interface CVBuilderContentProps {
 }
 
 export function CVBuilderContent({ user }: CVBuilderContentProps) {
+  const router = useRouter()
   const [saving, setSaving] = useState(false)
   const [loadingData, setLoadingData] = useState(true)
+  const [generatingCV, setGeneratingCV] = useState(false)
   
   // Section-specific saving states
   const [savingWorkExp, setSavingWorkExp] = useState(false)
@@ -806,9 +811,64 @@ export function CVBuilderContent({ user }: CVBuilderContentProps) {
     }
   }
 
-  // Export CV
+  // Generate LaTeX CV
+  const generateCV = async () => {
+    setGeneratingCV(true)
+    try {
+      // Get selected GitHub projects
+      const selectedGithubProjects = githubProjects.filter(p => selectedProjects.has(p.id))
+      
+      const response = await fetch("/api/generate-cv-latex", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          githubProjects: selectedGithubProjects,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || "Failed to generate CV")
+      }
+
+      const data = await response.json()
+      
+      // Store the LaTeX code in localStorage for the preview page
+      localStorage.setItem("generatedLatexCV", data.latexCode)
+      localStorage.setItem("analyzedProjects", JSON.stringify(data.analyzedProjects || []))
+      
+      toast.success("CV generated successfully!")
+      
+      // Navigate to CV preview page
+      router.push("/dashboard/student/cv-preview")
+    } catch (error) {
+      console.error("Error generating CV:", error)
+      toast.error(error instanceof Error ? error.message : "Failed to generate CV. Make sure the backend server is running.")
+    } finally {
+      setGeneratingCV(false)
+    }
+  }
+
+  // Export CV (download LaTeX file)
   const exportCV = () => {
-    toast.info("CV export feature coming soon!")
+    const latexCode = localStorage.getItem("generatedLatexCV")
+    if (!latexCode) {
+      toast.info("Please generate your CV first by clicking 'Generate CV'")
+      return
+    }
+    
+    // Create and download the .tex file
+    const blob = new Blob([latexCode], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${user.first_name || "My"}_${user.last_name || "CV"}_Resume.tex`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    
+    toast.success("LaTeX CV downloaded!")
   }
 
   const skillLevels: Skill["level"][] = ["Beginner", "Intermediate", "Advanced", "Expert"]
@@ -838,13 +898,19 @@ export function CVBuilderContent({ user }: CVBuilderContentProps) {
           <div className="flex gap-2">
             <Button variant="outline" onClick={exportCV}>
               <IconDownload className="mr-2 h-4 w-4" />
-              Export CV
+              Export LaTeX
             </Button>
-            <Button onClick={saveCV} disabled={saving}>
-              {saving ? (
+            <Button 
+              onClick={generateCV} 
+              disabled={generatingCV}
+              className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+            >
+              {generatingCV ? (
                 <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              {saving ? "Saving..." : "Save CV"}
+              ) : (
+                <IconSparkles className="mr-2 h-4 w-4" />
+              )}
+              {generatingCV ? "Generating..." : "Generate CV"}
             </Button>
           </div>
         </div>

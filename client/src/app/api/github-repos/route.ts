@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
-import { currentUser } from "@clerk/nextjs/server"
-import { supabase } from "@/lib/supabase"
+import { auth } from "@clerk/nextjs/server"
+import { supabaseAdmin } from "@/lib/supabase"
 
 interface GitHubRepo {
   id: number
@@ -86,9 +86,11 @@ function extractGitHubUsername(githubUrl: string): string | null {
 
 export async function GET() {
   try {
-    const user = await currentUser()
+    const { userId } = await auth()
     
-    if (!user) {
+    console.log("GitHub repos API - userId:", userId)
+    
+    if (!userId) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
@@ -96,34 +98,39 @@ export async function GET() {
     }
 
     // Get user data
-    const { data: userData, error: userError } = await supabase
+    const { data: userData, error: userError } = await supabaseAdmin
       .from("users")
       .select("id")
-      .eq("clerk_id", user.id)
+      .eq("clerk_id", userId)
       .single()
+
+    console.log("GitHub repos API - userData:", userData, "error:", userError)
 
     if (userError || !userData) {
       return NextResponse.json(
-        { error: "User not found" },
+        { error: "User not found in database. Please refresh the page." },
         { status: 404 }
       )
     }
 
     // Get student data with github_url
-    const { data: studentData, error: studentError } = await supabase
+    const { data: studentData, error: studentError } = await supabaseAdmin
       .from("students")
       .select("github_url")
       .eq("user_id", userData.id)
       .single()
 
-    if (studentError || !studentData) {
+    console.log("GitHub repos API - studentData:", studentData, "error:", studentError)
+
+    if (studentError) {
+      console.error("Student query error:", studentError)
       return NextResponse.json(
         { error: "Student profile not found. Please complete your profile first." },
         { status: 404 }
       )
     }
 
-    if (!studentData.github_url) {
+    if (!studentData || !studentData.github_url) {
       return NextResponse.json(
         { error: "GitHub URL not found in profile. Please add your GitHub URL in your profile settings." },
         { status: 400 }
@@ -131,6 +138,7 @@ export async function GET() {
     }
 
     const username = extractGitHubUsername(studentData.github_url)
+    console.log("GitHub repos API - extracted username:", username, "from URL:", studentData.github_url)
     
     if (!username) {
       return NextResponse.json(
@@ -141,6 +149,7 @@ export async function GET() {
 
     // Fetch repositories from GitHub API
     const githubApiUrl = `https://api.github.com/users/${username}/repos?sort=updated&per_page=100&type=owner`
+    console.log("GitHub repos API - fetching from:", githubApiUrl)
     
     const headers: HeadersInit = {
       "Accept": "application/vnd.github.v3+json",
@@ -215,9 +224,9 @@ export async function GET() {
 // Fetch README content for a specific repository
 export async function POST(request: Request) {
   try {
-    const user = await currentUser()
+    const { userId } = await auth()
     
-    if (!user) {
+    if (!userId) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
