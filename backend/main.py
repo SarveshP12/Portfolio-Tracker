@@ -5,10 +5,12 @@ FastAPI server for CV generation and GitHub analysis
 
 import os
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import tempfile
+from PyPDF2 import PdfReader
 
 # Load environment variables
 load_dotenv()
@@ -16,6 +18,8 @@ load_dotenv()
 # Import our modules
 from app.github_analyzer import GitHubAnalyzer, get_analyzer
 from app.latex_generator import LaTeXCVGenerator, get_generator
+from app.ats_analyzer import ATSAnalyzer, get_ats_analyzer
+from app.job_scraper import JobScraperManager, get_job_scraper_manager, JobMatcher
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -278,6 +282,157 @@ async def analyze_single_repo(owner: str, repo: str):
         raise HTTPException(status_code=500, detail=f"Error analyzing repository: {str(e)}")
 
 
+# ATS Analysis Models
+class ATSAnalysisRequest(BaseModel):
+    resume_text: str = Field(..., description="The full text content of the resume")
+    job_description: str = Field(..., description="The full text content of the job description")
+
+
+class ATSAnalysisResponse(BaseModel):
+    overall_score: float
+    category: str
+    category_description: str
+    breakdown: Dict[str, Any]
+    extracted_data: Dict[str, Any]
+    recommendations: List[Dict[str, str]]
+    extracted_info: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/ats-check", response_model=ATSAnalysisResponse)
+async def analyze_ats_compatibility(request: ATSAnalysisRequest):
+    """
+    Analyze resume against job description for ATS compatibility
+    
+    This endpoint performs comprehensive ATS analysis including:
+    - Keyword matching with synonym normalization
+    - Experience level matching
+    - Format compliance checking
+    - Semantic similarity analysis
+    
+    Returns a score from 0-100 with detailed breakdown and recommendations.
+    """
+    try:
+        if not request.resume_text or not request.job_description:
+            raise HTTPException(
+                status_code=400, 
+                detail="Both resume_text and job_description are required"
+            )
+        
+        if len(request.resume_text.strip()) < 50:
+            raise HTTPException(
+                status_code=400, 
+                detail="Resume text is too short for meaningful analysis"
+            )
+        
+        if len(request.job_description.strip()) < 50:
+            raise HTTPException(
+                status_code=400, 
+                detail="Job description is too short for meaningful analysis"
+            )
+        
+        analyzer = get_ats_analyzer()
+        result = analyzer.analyze(
+            resume_text=request.resume_text,
+            job_description=request.job_description
+        )
+        
+        return ATSAnalysisResponse(**result)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error analyzing ATS compatibility: {str(e)}"
+        )
+
+
+@app.post("/api/ats-check-pdf", response_model=ATSAnalysisResponse)
+async def analyze_ats_compatibility_pdf(
+    resume_pdf: UploadFile = File(..., description="Resume PDF file"),
+    job_description: str = Form(..., description="Job description text")
+):
+    """
+    Analyze resume PDF against job description for ATS compatibility
+    
+    This endpoint accepts a PDF file upload and job description text,
+    extracts text from the PDF using PyPDF2, then performs the same
+    comprehensive ATS analysis as the text-based endpoint.
+    """
+    try:
+        # Validate file type
+        if not resume_pdf.filename or not resume_pdf.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=400, 
+                detail="Only PDF files are supported"
+            )
+        
+        if not job_description or len(job_description.strip()) < 50:
+            raise HTTPException(
+                status_code=400, 
+                detail="Job description is required and must be at least 50 characters"
+            )
+        
+        # Read PDF file and save to temporary location
+        pdf_content = await resume_pdf.read()
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(pdf_content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Extract text from PDF
+            reader = PdfReader(tmp_file_path)
+            extracted_text = ""
+            
+            for page_num, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    extracted_text += page_text + "\n"
+            
+            # Clean up the extracted text
+            extracted_text = extracted_text.strip()
+            
+            if not extracted_text or len(extracted_text) < 50:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Could not extract sufficient text from PDF. Please ensure the PDF contains readable text (not just images)."
+                )
+            
+            # Analyze using the same ATS logic
+            analyzer = get_ats_analyzer()
+            result = analyzer.analyze(
+                resume_text=extracted_text,
+                job_description=job_description
+            )
+            
+            # Add extracted text length info to the response
+            result["extracted_info"] = {
+                "text_length": len(extracted_text),
+                "word_count": len(extracted_text.split()),
+                "page_count": len(reader.pages),
+                "filename": resume_pdf.filename
+            }
+            
+            return ATSAnalysisResponse(**result)
+        
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(tmp_file_path)
+            except OSError:
+                pass  # File may already be deleted
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error processing PDF and analyzing ATS compatibility: {str(e)}"
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
     
@@ -288,3 +443,236 @@ if __name__ == "__main__":
         port=port,
         reload=True,
     )
+
+
+# Job Finder Models and Endpoints
+class JobSearchRequest(BaseModel):
+    resume_text: Optional[str] = Field(None, description="Full text content of the resume")
+    resume_skills: Optional[List[str]] = Field(None, description="List of skills from the resume")
+    keywords: Optional[List[str]] = Field(None, description="Search keywords (if not provided, extracted from resume)")
+    location: Optional[str] = Field("India", description="Preferred job location")
+    job_type: Optional[str] = Field("", description="Job type: internship, full-time, etc.")
+    platforms: Optional[List[str]] = Field(None, description="Platforms to search: linkedin, internshala, foundit, naukri, indeed")
+
+
+class JobListingResponse(BaseModel):
+    id: str
+    title: str
+    company: str
+    location: str
+    job_type: str
+    experience_required: str
+    salary: str
+    description: str
+    skills_required: List[str]
+    posted_date: str
+    apply_url: str
+    source: str
+    match_score: float
+    matched_skills: List[str]
+    missing_skills: List[str]
+
+
+class JobSearchResponse(BaseModel):
+    jobs: List[JobListingResponse]
+    total_found: int
+    search_keywords: List[str]
+    extracted_resume_skills: List[str]
+    platforms_searched: List[str]
+    message: str
+
+
+class SkillExtractionRequest(BaseModel):
+    resume_text: str = Field(..., description="Full text content of the resume")
+
+
+class SkillExtractionResponse(BaseModel):
+    skills: List[str]
+    experience_years: int
+    message: str
+
+
+@app.post("/api/job-finder/search", response_model=JobSearchResponse)
+async def search_jobs(request: JobSearchRequest):
+    """
+    Search for jobs/internships across multiple platforms and match with resume
+    
+    This endpoint:
+    1. Extracts skills from the resume text
+    2. Searches multiple job platforms (LinkedIn, Internshala, Foundit, Naukri, Indeed)
+    3. Matches and ranks jobs based on resume skills and preferences
+    4. Returns sorted results with match scores
+    """
+    try:
+        if not request.resume_text and not request.keywords:
+            raise HTTPException(
+                status_code=400,
+                detail="Either resume_text or keywords must be provided"
+            )
+        
+        # Get the job scraper manager
+        scraper_manager = get_job_scraper_manager(headless=True)
+        
+        # Perform search and matching
+        result = scraper_manager.search_and_match(
+            resume_text=request.resume_text or "",
+            resume_skills=request.resume_skills,
+            keywords=request.keywords,
+            location=request.location or "India",
+            job_type=request.job_type or "",
+            platforms=request.platforms
+        )
+        
+        return JobSearchResponse(
+            jobs=result["jobs"],
+            total_found=result["total_found"],
+            search_keywords=result["search_keywords"],
+            extracted_resume_skills=result["extracted_resume_skills"],
+            platforms_searched=result["platforms_searched"],
+            message=f"Found {result['total_found']} jobs matching your profile"
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error searching for jobs: {str(e)}"
+        )
+
+
+@app.post("/api/job-finder/search-pdf", response_model=JobSearchResponse)
+async def search_jobs_with_pdf(
+    resume_pdf: UploadFile = File(..., description="Resume PDF file"),
+    keywords: str = Form(None, description="Comma-separated search keywords"),
+    location: str = Form("India", description="Preferred job location"),
+    job_type: str = Form("", description="Job type: internship, full-time, etc."),
+    platforms: str = Form(None, description="Comma-separated platforms to search")
+):
+    """
+    Search for jobs using a PDF resume
+    
+    Accepts a resume PDF file, extracts text, and searches for matching jobs.
+    """
+    try:
+        # Validate file type
+        if not resume_pdf.filename or not resume_pdf.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only PDF files are supported"
+            )
+        
+        # Read PDF file
+        pdf_content = await resume_pdf.read()
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(pdf_content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Extract text from PDF
+            reader = PdfReader(tmp_file_path)
+            extracted_text = ""
+            
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    extracted_text += page_text + "\n"
+            
+            extracted_text = extracted_text.strip()
+            
+            if not extracted_text or len(extracted_text) < 50:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not extract sufficient text from PDF"
+                )
+            
+            # Parse form inputs
+            keywords_list = [k.strip() for k in keywords.split(",")] if keywords else None
+            platforms_list = [p.strip() for p in platforms.split(",")] if platforms else None
+            
+            # Get the job scraper manager
+            scraper_manager = get_job_scraper_manager(headless=True)
+            
+            # Perform search and matching
+            result = scraper_manager.search_and_match(
+                resume_text=extracted_text,
+                resume_skills=None,
+                keywords=keywords_list,
+                location=location,
+                job_type=job_type,
+                platforms=platforms_list
+            )
+            
+            return JobSearchResponse(
+                jobs=result["jobs"],
+                total_found=result["total_found"],
+                search_keywords=result["search_keywords"],
+                extracted_resume_skills=result["extracted_resume_skills"],
+                platforms_searched=result["platforms_searched"],
+                message=f"Found {result['total_found']} jobs matching your profile"
+            )
+        
+        finally:
+            try:
+                os.unlink(tmp_file_path)
+            except OSError:
+                pass
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing PDF and searching for jobs: {str(e)}"
+        )
+
+
+@app.post("/api/job-finder/extract-skills", response_model=SkillExtractionResponse)
+async def extract_resume_skills(request: SkillExtractionRequest):
+    """
+    Extract skills and experience from resume text
+    
+    Useful for previewing what skills will be matched before searching.
+    """
+    try:
+        if not request.resume_text or len(request.resume_text.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Resume text is too short"
+            )
+        
+        matcher = JobMatcher()
+        skills = matcher.extract_skills_from_resume(request.resume_text)
+        experience = matcher.extract_experience_years(request.resume_text)
+        
+        return SkillExtractionResponse(
+            skills=skills,
+            experience_years=experience,
+            message=f"Extracted {len(skills)} skills from resume"
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error extracting skills: {str(e)}"
+        )
+
+
+@app.get("/api/job-finder/platforms")
+async def get_available_platforms():
+    """
+    Get list of available job platforms
+    """
+    return {
+        "platforms": [
+            {"id": "linkedin", "name": "LinkedIn", "description": "Professional network with job listings"},
+            {"id": "internshala", "name": "Internshala", "description": "India's largest internship platform"},
+            {"id": "foundit", "name": "Foundit", "description": "Monster India rebranded as Foundit"},
+            {"id": "naukri", "name": "Naukri", "description": "India's leading job portal"},
+            {"id": "indeed", "name": "Indeed", "description": "Global job search engine"},
+        ]
+    }

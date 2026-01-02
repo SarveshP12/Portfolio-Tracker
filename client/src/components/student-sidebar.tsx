@@ -65,6 +65,11 @@ const studentNavItems = [
     icon: IconTarget,
   },
   {
+    title: "Job Finder",
+    url: "/dashboard/student/job-finder",
+    icon: IconSearch,
+  },
+  {
     title: "Job Matching",
     url: "/dashboard/student/job-matching",
     icon: IconSparkles,

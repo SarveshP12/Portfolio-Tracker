@@ -24,3 +24,13 @@ aiohttp==3.11.11
 
 # CORS
 starlette==0.41.3
+
+# PDF processing
+PyPDF2==3.0.1
+
+# File handling
+python-multipart==0.0.6
+
+# Web Scraping with Selenium
+selenium==4.27.1
+webdriver-manager==4.0.2
